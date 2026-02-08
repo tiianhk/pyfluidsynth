@@ -29,12 +29,14 @@ from ctypes import (
     POINTER,
     Structure,
     byref,
+    cast,
     c_char,
     c_char_p,
     c_double,
     c_float,
     c_int,
     c_short,
+    c_ubyte,
     c_uint,
     c_void_p,
     create_string_buffer,
@@ -108,6 +110,18 @@ api_version = '1.3.5'
 
 FLUID_OK = 0
 FLUID_FAILED = -1
+
+# fluidsynth/include/fluidsynth/gen.h
+GEN_COARSETUNE = 51
+GEN_FINETUNE = 52
+GEN_SAMPLEMODE = 54
+GEN_SCALETUNE = 56
+GEN_OVERRIDEROOTKEY = 58
+GEN_LAST = 63
+
+# fluidsynth/src/synth/fluid_gen.h
+GEN_UNUSED = 0
+GEN_SET = 1
 
 fluid_version = cfunc('fluid_version', c_void_p,
                         ('major', POINTER(c_int), 1),
@@ -297,6 +311,90 @@ class fluid_synth_channel_info_t(Structure):
         ('program', c_int),
         ('name', c_char*32),
         ('reserved', c_char*32)]
+
+class fluid_zone_range_t(Structure):
+    _fields_ = [
+        ("keylo", c_int),
+        ("keyhi", c_int),
+        ("vello", c_int),
+        ("velhi", c_int),
+        ("ignore", c_ubyte),
+    ]
+
+class fluid_gen_t(Structure):
+    _fields_ = [
+        ("flags", c_ubyte),
+        ("val", c_double),
+        ("mod", c_double),
+        ("nrpn", c_double),
+    ]
+
+class fluid_sample_t(Structure):
+    _fields_ = [
+        ("name", c_char * 21),
+        ("source_start", c_uint),
+        ("source_end", c_uint),
+        ("source_loopstart", c_uint),
+        ("source_loopend", c_uint),
+        ("start", c_uint),
+        ("end", c_uint),
+        ("loopstart", c_uint),
+        ("loopend", c_uint),
+        ("data", c_void_p),
+        ("data24", c_void_p),
+        ("samplerate", c_uint),
+        ("origpitch", c_int),
+        ("pitchadj", c_int),
+        ("sampletype", c_int),
+        ("auto_free", c_int),
+        ("amplitude_that_reaches_noise_floor_is_valid", c_int),
+        ("amplitude_that_reaches_noise_floor", c_double),
+        ("refcount", c_uint),
+        ("preset_count", c_int),
+        ("default_modulators", c_void_p),
+        ("notify", c_void_p),
+    ]
+
+class fluid_defpreset_t(Structure): pass
+class fluid_preset_zone_t(Structure): pass
+class fluid_inst_t(Structure): pass
+class fluid_inst_zone_t(Structure): pass
+
+fluid_defpreset_t._fields_ = [
+    ("next", POINTER(fluid_defpreset_t)),
+    ("name", c_char * 21),
+    ("bank", c_uint),
+    ("num", c_uint),
+    ("global_zone", POINTER(fluid_preset_zone_t)),
+    ("zone", POINTER(fluid_preset_zone_t)),
+    ("pinned", c_int),
+]
+
+fluid_preset_zone_t._fields_ = [
+    ("next", POINTER(fluid_preset_zone_t)),
+    ("name", c_char_p),
+    ("inst", POINTER(fluid_inst_t)),
+    ("voice_zone", c_void_p),
+    ("range", fluid_zone_range_t),
+    ("gen", fluid_gen_t * GEN_LAST),
+    ("mod", c_void_p),
+]
+
+fluid_inst_t._fields_ = [
+    ("name", c_char * 21),
+    ("source_idx", c_int),
+    ("global_zone", POINTER(fluid_inst_zone_t)),
+    ("zone", POINTER(fluid_inst_zone_t)),
+]
+
+fluid_inst_zone_t._fields_ = [
+    ("next", POINTER(fluid_inst_zone_t)),
+    ("name", c_char_p),
+    ("sample", POINTER(fluid_sample_t)),
+    ("range", fluid_zone_range_t),
+    ("gen", fluid_gen_t * GEN_LAST),
+    ("mod", c_void_p),
+]
 
 fluid_synth_get_channel_info = cfunc('fluid_synth_get_channel_info', c_int,
                                   ('synth', c_void_p, 1),
@@ -725,6 +823,13 @@ fluid_sfont_get_preset = cfunc('fluid_sfont_get_preset', c_void_p,
 fluid_preset_get_name = cfunc('fluid_preset_get_name', c_char_p,
                               ('preset', c_void_p, 1))
 
+fluid_preset_get_data = cfunc('fluid_preset_get_data', c_void_p,
+                              ('preset', c_void_p, 1))
+
+fluid_synth_get_channel_preset = cfunc('fluid_synth_get_channel_preset', c_void_p,
+                                       ('synth', c_void_p, 1),
+                                       ('chan', c_int, 1))
+
 fluid_synth_set_reverb = cfunc('fluid_synth_set_reverb', c_int,
                                     ('synth', c_void_p, 1),
                                     ('roomsize', c_double, 1),
@@ -1056,6 +1161,84 @@ class Synth:
         if chan < 0:
             return False
         return fluid_synth_noteoff(self.synth, chan, key)
+    def get_note_info(self, chan, key):
+        if key < 0 or key > 127:
+            return []
+        if chan < 0:
+            return []
+        preset = fluid_synth_get_channel_preset(self.synth, chan)
+        if not preset:
+            return []
+        data_ptr = fluid_preset_get_data(preset)
+        if not data_ptr:
+            return []
+        def retrieve_gen_val(GEN_INDEX, default_val, zones):
+            inst_zone, global_inst_zone, preset_zone, global_preset_zone = zones
+            if inst_zone.gen[GEN_INDEX].flags == GEN_SET:
+                val = inst_zone.gen[GEN_INDEX].val
+            elif global_inst_zone and global_inst_zone.gen[GEN_INDEX].flags == GEN_SET:
+                val = global_inst_zone.gen[GEN_INDEX].val
+            else:
+                val = default_val
+            if preset_zone.gen[GEN_INDEX].flags == GEN_SET:
+                val += preset_zone.gen[GEN_INDEX].val
+            elif global_preset_zone and global_preset_zone.gen[GEN_INDEX].flags == GEN_SET:
+                val += global_preset_zone.gen[GEN_INDEX].val
+            return val
+        try:
+            defpreset = cast(data_ptr, POINTER(fluid_defpreset_t)).contents
+            preset_zone_ptr = defpreset.zone
+            global_preset_zone = defpreset.global_zone.contents if defpreset.global_zone else None
+            results = []
+            while preset_zone_ptr:
+                preset_zone = preset_zone_ptr.contents
+                if preset_zone.range.keylo <= key <= preset_zone.range.keyhi:
+                    inst_ptr = preset_zone.inst
+                    if inst_ptr:
+                        inst = inst_ptr.contents
+                        inst_zone_ptr = inst.zone
+                        global_inst_zone = inst.global_zone.contents if inst.global_zone else None
+                        while inst_zone_ptr:
+                            inst_zone = inst_zone_ptr.contents
+                            if inst_zone.range.keylo <= key <= inst_zone.range.keyhi:
+                                sample_ptr = inst_zone.sample
+                                if sample_ptr:
+                                    sample = sample_ptr.contents
+                                    zones = (inst_zone, global_inst_zone, preset_zone, global_preset_zone)
+                                    loopmode = retrieve_gen_val(GEN_SAMPLEMODE, 0, zones)
+                                    override_rootkey = retrieve_gen_val(GEN_OVERRIDEROOTKEY, -1, zones)
+                                    scaletune = retrieve_gen_val(GEN_SCALETUNE, 100.0, zones)
+                                    coarsetune = retrieve_gen_val(GEN_COARSETUNE, 0.0, zones)
+                                    finetune = retrieve_gen_val(GEN_FINETUNE, 0.0, zones)
+                                    if override_rootkey >= 0:
+                                        root_pitch_cents = override_rootkey * 100.0 - sample.pitchadj
+                                    else:
+                                        root_pitch_cents = sample.origpitch * 100.0 - sample.pitchadj
+                                    gen_pitch_cents = scaletune * (key - root_pitch_cents / 100.0) + root_pitch_cents
+                                    final_pitch_cents = gen_pitch_cents + (coarsetune * 100.0) + finetune
+                                    pitch_shift_cents = final_pitch_cents - root_pitch_cents
+                                    pitch_shift_semitones = pitch_shift_cents / 100.0
+                                    results.append({
+                                        "instrument_name": inst.name.decode('latin-1'),
+                                        "sample_name": sample.name.decode('latin-1'),
+                                        "origpitch": sample.origpitch,
+                                        "override_rootkey": override_rootkey,
+                                        "pitchadj": sample.pitchadj,
+                                        "scaletune": scaletune,
+                                        "coarsetune": coarsetune,
+                                        "finetune": finetune,
+                                        "pitch_shift_semitones": pitch_shift_semitones,
+                                        "vello": inst_zone.range.vello,
+                                        "velhi": inst_zone.range.velhi,
+                                        "sampletype": sample.sampletype,
+                                        "loopmode": loopmode,
+                                    })
+                            inst_zone_ptr = inst_zone.next
+                preset_zone_ptr = preset_zone.next
+            return results
+        except Exception as e:
+            print(f"Error in get_note_info: {e}")
+            return []
     def pitch_bend(self, chan, val):
         """Adjust pitch of a playing channel by small amounts
 
