@@ -1221,6 +1221,7 @@ class Synth:
                                     results.append({
                                         "instrument_name": inst.name.decode('latin-1'),
                                         "sample_name": sample.name.decode('latin-1'),
+                                        "sample_id": cast(sample_ptr, c_void_p).value,
                                         "origpitch": sample.origpitch,
                                         "override_rootkey": override_rootkey,
                                         "pitchadj": sample.pitchadj,
