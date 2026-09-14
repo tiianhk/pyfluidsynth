@@ -826,6 +826,18 @@ fluid_preset_get_name = cfunc('fluid_preset_get_name', c_char_p,
 fluid_preset_get_data = cfunc('fluid_preset_get_data', c_void_p,
                               ('preset', c_void_p, 1))
 
+fluid_preset_get_banknum = cfunc('fluid_preset_get_banknum', c_int,
+                                 ('preset', c_void_p, 1))
+
+fluid_preset_get_num = cfunc('fluid_preset_get_num', c_int,
+                             ('preset', c_void_p, 1))
+
+fluid_sfont_iteration_start = cfunc('fluid_sfont_iteration_start', None,
+                                    ('sfont', c_void_p, 1))
+
+fluid_sfont_iteration_next = cfunc('fluid_sfont_iteration_next', c_void_p,
+                                   ('sfont', c_void_p, 1))
+
 fluid_synth_get_channel_preset = cfunc('fluid_synth_get_channel_preset', c_void_p,
                                        ('synth', c_void_p, 1),
                                        ('chan', c_int, 1))
@@ -993,6 +1005,22 @@ class Synth:
             return fluid_preset_get_name(preset).decode('latin-1')
         else:
             return None
+    def sfpresets(self, sfid):
+        """Yields (bank, prenum, name) for each preset the soundfont declares"""
+        if fluid_synth_get_sfont_by_id is None or fluid_sfont_iteration_next is None:
+            return
+        sfont=fluid_synth_get_sfont_by_id(self.synth, sfid)
+        if not sfont:
+            return
+        fluid_sfont_iteration_start(sfont)
+        while True:
+            preset=fluid_sfont_iteration_next(sfont)
+            if not preset:
+                return
+            name=fluid_preset_get_name(preset)
+            yield (fluid_preset_get_banknum(preset),
+                   fluid_preset_get_num(preset),
+                   name.decode('latin-1') if name else None)
     def router_clear(self):
         if self.router is not None:
             fluid_midi_router_clear_rules(self.router)
