@@ -1017,10 +1017,9 @@ class Synth:
             preset=fluid_sfont_iteration_next(sfont)
             if not preset:
                 return
-            name=fluid_preset_get_name(preset)
             yield (fluid_preset_get_banknum(preset),
                    fluid_preset_get_num(preset),
-                   name.decode('latin-1') if name else None)
+                   fluid_preset_get_name(preset).decode('latin-1'))
     def router_clear(self):
         if self.router is not None:
             fluid_midi_router_clear_rules(self.router)
